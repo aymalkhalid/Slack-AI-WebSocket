@@ -1,6 +1,6 @@
 # Slack AI WebSocket
 
-Slack Bolt bot that runs in [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) with no public HTTP URL. It handles channel `@app` mentions and direct messages, then replies through Slack using Bolt's `say`.
+Slack Bolt bot that runs in [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) with no public HTTP URL. It handles channel `@app` mentions and direct messages, then replies through Slack using Bolt's `say`. Channel mentions are answered in Slack threads, and recent conversation turns are stored in MongoDB Atlas so the AI can remember thread and DM context across restarts.
 
 ```mermaid
 flowchart LR
@@ -9,13 +9,19 @@ flowchart LR
     websocket["Socket Mode WebSocket<br/>SLACK_APP_TOKEN<br/>connections:write"]
     app["Local Python process<br/>python main.py"]
     handlers["Bolt handlers<br/>app_mention + DM message"]
-    reply["Slack Web API reply<br/>SLACK_BOT_TOKEN<br/>chat:write"]
+    threadTarget["Thread target<br/>channel: thread_ts or ts<br/>DM: existing thread_ts only"]
+    memory["MongoDB Atlas memory<br/>turns by thread or DM key"]
+    reply["Slack Web API reply<br/>say(text=reply, thread_ts?)"]
 
     user --> workspace
     workspace <-->|event payloads| websocket
     websocket --> app
     app --> handlers
+    handlers --> threadTarget
+    threadTarget --> memory
+    memory --> handlers
     handlers --> reply
+    threadTarget --> reply
     reply --> workspace
 ```
 
@@ -27,6 +33,11 @@ Create `.env` in the project root:
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 LOG_LEVEL=INFO
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-5-mini
+MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/?appName=SlackMemoryCluster
+MONGODB_DATABASE=slack_ai_chatbot
+MEMORY_MAX_TURNS=12
 ```
 
 Run the bot:
@@ -101,7 +112,7 @@ flowchart LR
     mentionScope --> mentionEvent["app_mention event"]
     dmScope --> dmEvent["message.im event"]
     channelScope -.-> channelEvent["message.channels event"]
-    chat --> say["say(reply)<br/>chat.postMessage"]
+    chat --> say["say(text=reply, thread_ts=...)<br/>chat.postMessage"]
 
     mentionEvent --> mentionHandler["handle_mentions"]
     dmEvent --> dmHandler["handle_direct_messages"]
@@ -149,26 +160,54 @@ Use `app_mention` for channel mentions. Add `message.channels` only when you wan
 flowchart TD
     incoming["Incoming Slack event over Socket Mode"]
     type{"Event type"}
-    mention["app_mention"]
-    message["message"]
+    mentionStart["Channel mention<br/>app_mention"]
+    message["Message event"]
     dmCheck{"channel_type == im?"}
     botCheck{"bot_id present?"}
     subtypeCheck{"subtype present?"}
-    mentionReply["Log context<br/>build mention reply<br/>say(reply)"]
-    dmReply["Log context<br/>build DM reply<br/>say(reply)"]
     ignore["Ignore event<br/>no reply"]
 
+    mentionClean["1. Clean mention text<br/>remove bot markup"]
+    mentionThread{"2. thread_ts present?"}
+    mentionExisting["Use existing parent thread_ts"]
+    mentionNew["Use message ts<br/>to create a thread"]
+    mentionMemory["3. Load memory<br/>workspace + channel + thread_ts"]
+    mentionAI["4. Generate AI reply<br/>clean text + history"]
+    mentionSay["5. say(text=reply, thread_ts)<br/>post in source thread"]
+    mentionSave["6. Save user + assistant turns"]
+
+    dmText["1. Read DM text"]
+    dmThread{"2. thread_ts present?"}
+    dmThreadKey["Threaded DM key<br/>workspace + DM + thread_ts"]
+    dmDefaultKey["Normal DM key<br/>workspace + DM + default"]
+    dmMemory["3. Load DM memory"]
+    dmAI["4. Generate AI reply<br/>DM text + history"]
+    dmSayChoice{"5. thread_ts present?"}
+    dmSayThread["say(text=reply, thread_ts)<br/>preserve DM thread"]
+    dmSayTop["say(reply)<br/>normal DM response"]
+    dmSave["6. Save user + assistant turns"]
+
     incoming --> type
-    type -->|app_mention| mention
+    type -->|app_mention| mentionStart
     type -->|message| message
-    mention --> mentionReply
+
+    mentionStart --> mentionClean --> mentionThread
+    mentionThread -->|Yes| mentionExisting --> mentionMemory
+    mentionThread -->|No| mentionNew --> mentionMemory
+    mentionMemory --> mentionAI --> mentionSay --> mentionSave
+
     message --> dmCheck
     dmCheck -->|No| ignore
     dmCheck -->|Yes| botCheck
     botCheck -->|Yes| ignore
     botCheck -->|No| subtypeCheck
     subtypeCheck -->|Yes| ignore
-    subtypeCheck -->|No| dmReply
+    subtypeCheck -->|No| dmText --> dmThread
+    dmThread -->|Yes| dmThreadKey --> dmMemory
+    dmThread -->|No| dmDefaultKey --> dmMemory
+    dmMemory --> dmAI --> dmSayChoice
+    dmSayChoice -->|Yes| dmSayThread --> dmSave
+    dmSayChoice -->|No| dmSayTop --> dmSave
 ```
 
 ## Step 5 - Verify
@@ -180,8 +219,22 @@ flowchart TD
 | Bot scopes | `chat:write`, `app_mentions:read`, `im:history` are installed |
 | Events | `app_mention` and `message.im` are subscribed |
 | Socket Mode | Enabled; no public Request URL is needed |
-| Channel mention | Bot is invited to the channel, then `@YourBot hello` logs `app_mention received` |
-| Direct message | App Home messages are enabled, then a DM logs `dm received` |
+| Channel mention | Bot is invited to the channel, then `@YourBot hello` logs `app_mention received` and replies in that message's thread |
+| Follow-up in same thread | Ask a follow-up in the same Slack thread; the bot uses recent saved turns as context |
+| Direct message | App Home messages are enabled, then a DM logs `dm received` and remembers prior DM turns |
+
+## Conversation Memory
+
+Memory is stored in MongoDB Atlas through `memory_store.py`.
+
+| Conversation type | Memory key |
+| --- | --- |
+| Channel mention | Workspace + channel + Slack `thread_ts` |
+| New top-level channel mention | Workspace + channel + the message's own `ts`, which creates the thread |
+| Normal DM | Workspace + DM channel + `default` |
+| Threaded DM | Workspace + DM channel + Slack `thread_ts` |
+
+The bot loads the most recent `MEMORY_MAX_TURNS` role turns before calling OpenAI, then saves the current `user` and `assistant` turns after Slack accepts the reply call. MongoDB access stays inside `memory_store.py`; `main.py` only calls the store API.
 
 ## Configuration
 
@@ -190,14 +243,24 @@ flowchart TD
 | `SLACK_BOT_TOKEN` | Bot User OAuth Token (`xoxb-...`) used for Slack Web API calls such as replies. |
 | `SLACK_APP_TOKEN` | App-level token (`xapp-...`) with `connections:write`, used only for Socket Mode. |
 | `LOG_LEVEL` | Optional logging level; defaults to `INFO`. |
+| `OPENAI_API_KEY` | OpenAI API key used by `ai_handler.py` to generate replies. |
+| `OPENAI_MODEL` | Optional OpenAI model name; defaults in `ai_handler.py`. |
+| `MONGODB_URI` | MongoDB Atlas connection string for persistent memory. |
+| `MONGODB_DATABASE` | Optional MongoDB database name; defaults to `slack_ai_chatbot`. |
+| `MEMORY_MAX_TURNS` | Optional count of recent role turns sent to the AI; defaults to `12`. |
 
 ## Project Layout
 
 ```text
 main.py                  # Entry point and event handlers
+ai_handler.py            # OpenAI Responses API wrapper
+memory_store.py          # MongoDB Atlas conversation state and role-turn storage
 requirements.txt         # Python dependencies
+docs/                    # Video diagrams and flow walkthroughs (see docs/README.md)
 setupslackwebsocket.md   # Detailed Slack dashboard setup guide
 ARCHITECTURE.md          # Runtime architecture notes and diagrams
+PLAYLIST.md              # YouTube series roadmap
+tests/                   # Focused unit tests for threading, memory, and AI input
 ```
 
 ## References
@@ -209,3 +272,14 @@ ARCHITECTURE.md          # Runtime architecture notes and diagrams
 - [`message.im` event](https://docs.slack.dev/reference/events/message.im/)
 - [`message.channels` event](https://docs.slack.dev/reference/events/message.channels/)
 - [`channels:history` scope](https://docs.slack.dev/reference/scopes/channels.history/)
+
+## Security
+
+- **Never commit `.env`.** It holds live Slack, OpenAI, and MongoDB credentials. Copy `.env.example` locally and keep `.env` out of version control (listed in `.gitignore`).
+- **Rotate tokens** if they were ever committed, shared, or pasted into issues or chat. Regenerate Slack app/bot tokens and OpenAI keys in their dashboards, then update your local `.env`.
+- **Before making this repo public**, confirm no secrets in Git history:
+  ```bash
+  git log --all --full-history -- .env          # should be empty
+  git grep -E 'xox[bpsa]-[0-9]|xapp-[0-9]|sk-' # should match nothing except placeholders
+  ```
+- **Do not commit** `.venv/`, logs, or screenshots that show tokens from Slack or cloud dashboards.

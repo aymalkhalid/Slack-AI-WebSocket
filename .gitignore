@@ -14,3 +14,14 @@ build/
 .idea/
 .vscode/
 *.log
+
+# Local voiceover / recording scripts (not committed)
+docs/voiceovers/
+#
+explainers/
+
+# Windows alternate data streams (not committed)
+*:Zone.Identifier
+
+# Duplicate of docs/Architecture & Diagrams/Diagram Explainer.png
+/Diagram Explainer.png

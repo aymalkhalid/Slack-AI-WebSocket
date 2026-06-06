@@ -9,7 +9,8 @@ Configure the **AI Chatbot** Slack app and run `main.py` over [Socket Mode](http
 | --------------------- | ------------------------ | -------------------------------- |
 | @mention in a channel | `app_mention`            | `handle_mentions`                |
 | Direct message        | `message.im` → `message` | `handle_direct_messages`         |
-| Reply style           | Top-level only           | `say(reply)` without `thread_ts` |
+| Reply style           | Threaded channel replies | `say(text=reply, thread_ts=...)` |
+| Memory style          | MongoDB Atlas turns       | `thread_ts` / DM channel key     |
 
 
 ---
@@ -18,7 +19,8 @@ Configure the **AI Chatbot** Slack app and run `main.py` over [Socket Mode](http
 
 - Slack workspace with permission to [create apps](https://api.slack.com/apps)
 - Python 3.10+
-- Packages: `slack-bolt`, `python-dotenv`
+- Packages installed from `requirements.txt` (`slack-bolt`, `python-dotenv`, `openai`, `pymongo`, `dnspython`)
+- MongoDB Atlas connection string for persistent memory
 
 ---
 
@@ -97,7 +99,7 @@ Each bot event requires its matching scope:
 - Socket Mode ON (Settings → Socket Mode)
 - App-level token with `connections:write` → `SLACK_APP_TOKEN` (not a bot scope)
 - Messages tab ON (Features → App Home)
-- App installed; both tokens in `.env`
+- App installed; Slack, OpenAI, and MongoDB values in `.env`
 
 ---
 
@@ -197,12 +199,12 @@ Create `.env` in the project root (do not commit):
 ```env
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
-```
-
-Optional:
-
-```env
 LOG_LEVEL=INFO
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-5-mini
+MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/?appName=SlackMemoryCluster
+MONGODB_DATABASE=slack_ai_chatbot
+MEMORY_MAX_TURNS=12
 ```
 
 Install and start:
@@ -210,7 +212,7 @@ Install and start:
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install slack-bolt python-dotenv
+pip install -r requirements.txt
 python main.py
 ```
 
@@ -234,11 +236,25 @@ In Slack:
 
 ---
 
-### Step 10 — Non-threaded replies
+### Step 10 — Threaded replies
 
 - Slack threads when `thread_ts` is set on `chat.postMessage`
-- `main.py` uses `say(reply)` without `thread_ts` → top-level message
-- To reply in a thread: `say(text=reply, thread_ts=event.get("thread_ts"))`
+- For a message already in a thread, Slack sends `event["thread_ts"]`
+- For a new top-level mention, use the message's own `event["ts"]` to create the thread
+- Current code uses `thread_ts = event.get("thread_ts") or event.get("ts")` for channel mentions
+- DMs stay top-level unless the incoming DM is already inside a thread
+
+---
+
+### Step 11 — Persistent memory
+
+- `memory_store.py` stores conversations and role turns in MongoDB Atlas
+- Channel conversations use workspace + channel + Slack `thread_ts`
+- Normal DMs use workspace + DM channel + `default`
+- The bot loads the most recent `MEMORY_MAX_TURNS` turns before each OpenAI call
+- The bot saves the current `user` and `assistant` turns after Slack accepts the reply call
+- Set `MONGODB_URI` in `.env` to your Atlas connection string
+- Optionally set `MONGODB_DATABASE`; it defaults to `slack_ai_chatbot`
 
 ---
 
@@ -253,9 +269,10 @@ In Slack:
 | 4   | Bot scopes      | `chat:write`, `app_mentions:read`, `im:history` |
 | 5   | Bot events      | `app_mention`, `message.im`                     |
 | 6   | Install         | Workspace installed; `xoxb-` token in `.env`    |
-| 7   | Process         | `python main.py` → `Bolt app is running!`       |
-| 8   | @mention test   | Log: `app_mention received`                     |
-| 9   | DM test         | Apps → your bot → message → log: `dm received`  |
+| 7   | MongoDB Atlas   | `MONGODB_URI` is present and Atlas allows access |
+| 8   | Process         | `python main.py` → `Bolt app is running!`       |
+| 9   | @mention test   | Log: `app_mention received`                     |
+| 10  | DM test         | Apps → your bot → message → log: `dm received`  |
 
 
 Use `LOG_LEVEL=DEBUG` to see ignored `message.channels` payloads if that event is still subscribed.
@@ -271,6 +288,9 @@ Use `LOG_LEVEL=DEBUG` to see ignored `message.channels` payloads if that event i
 | `SLACK_APP_TOKEN`    | `SocketModeHandler(app, app_token).start()`      |
 | `app_mention`        | `@app.event("app_mention")`                      |
 | `message.im`         | `@app.event("message")` + `channel_type == "im"` |
+| Threaded replies     | `thread_ts = event.get("thread_ts") or event.get("ts")` |
+| Persistent memory    | `memory_store.py` + `ConversationMemoryStore`     |
+| AI replies           | `ai_handler.py` + `generate_ai_reply(..., history=...)` |
 | Bot / subtype filter | Skip `bot_id` and `subtype` on DMs               |
 | Logging              | `LOG_LEVEL` env; events logged at INFO           |
 
@@ -287,7 +307,8 @@ Use `LOG_LEVEL=DEBUG` to see ignored `message.channels` payloads if that event i
 | DMs disabled in Slack                  | Messages tab off                          | Step 4                                                      |
 | No `app_mention` events                | Bot not in channel                        | Step 9                                                      |
 | No DM events                           | Missing `message.im` or `im:history`      | Steps 5–6; reinstall                                        |
-| Bot replies in thread                  | `thread_ts` passed to API                 | Use `say(reply)` without `thread_ts` (default in `main.py`) |
+| Bot does not reply in a channel thread | Missing `thread_ts` in `say(...)`         | Confirm `main.py` passes `thread_ts` for `app_mention`      |
+| Bot forgets after restart              | MongoDB URI missing or unreachable        | Check `MONGODB_URI`, network access, and Atlas IP allowlist |
 | Extra DEBUG noise                      | `message.channels` subscribed             | Remove event or set `LOG_LEVEL=INFO`                        |
 | Changes not applied                    | Scopes/events updated                     | **Reinstall to Workspace**                                  |
 
@@ -316,4 +337,3 @@ Use `LOG_LEVEL=DEBUG` to see ignored `message.channels` payloads if that event i
 - [Bolt for Python](https://slack.dev/tools/bolt-python/)
 - [`app_mention` event](https://api.slack.com/events/app_mention)
 - [`message` events](https://api.slack.com/events/message)
-
