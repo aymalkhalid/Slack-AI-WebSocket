@@ -21,6 +21,18 @@ below.
 | `flowchart.md` | Mermaid source for the main flowchart |
 | `flowchart.svg` | Rendered flowchart for viewers and thumbnails |
 
+## Architecture & Diagrams
+
+Static PNGs used in later playlist videos (event handling, MongoDB, channel vs DM flows):
+
+| Folder | Contents |
+| --- | --- |
+| [Architecture & Diagrams/Channel/](Architecture%20&%20Diagrams/Channel/) | Channel `@app` mention flow (`4A`, `4B`, `App Mention`) |
+| [Architecture & Diagrams/DM/](Architecture%20&%20Diagrams/DM/) | Direct-message flow (`4C`–`4E`, `Message DM`) |
+| [Architecture & Diagrams/High Level - Overview/](Architecture%20&%20Diagrams/High%20Level%20-%20Overview/) | End-to-end event-handling summaries |
+| [Architecture & Diagrams/MongoDb/](Architecture%20&%20Diagrams/MongoDb/) | MongoDB Atlas memory setup (`1`–`6`) |
+| [Architecture & Diagrams/Sequence Diagarms/](Architecture%20&%20Diagrams/Sequence%20Diagarms/) | OpenAI + MongoDB sequence diagram |
+
 ## Related repo docs
 
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — runtime architecture for the whole bot
