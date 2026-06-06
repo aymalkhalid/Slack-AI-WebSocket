@@ -29,7 +29,7 @@ Static PNGs used in later playlist videos (event handling, MongoDB, channel vs D
 | --- | --- |
 | [Architecture & Diagrams/Channel/](Architecture%20&%20Diagrams/Channel/) | Channel `@app` mention flow (`4A`, `4B`, `App Mention`) |
 | [Architecture & Diagrams/DM/](Architecture%20&%20Diagrams/DM/) | Direct-message flow (`4C`–`4E`, `Message DM`) |
-| [Architecture & Diagrams/High Level - Overview/](Architecture%20&%20Diagrams/High%20Level%20-%20Overview/) | End-to-end event-handling summaries |
+| [Architecture & Diagrams/High Level - Overview/](Architecture%20&%20Diagrams/High%20Level%20-%20Overview/) | End-to-end summaries (`Diagram Explainer`, event-handling flows) |
 | [Architecture & Diagrams/MongoDb/](Architecture%20&%20Diagrams/MongoDb/) | MongoDB Atlas memory setup (`1`–`6`) |
 | [Architecture & Diagrams/Sequence Diagarms/](Architecture%20&%20Diagrams/Sequence%20Diagarms/) | OpenAI + MongoDB sequence diagram |
 
